@@ -3,6 +3,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as ec
+import os
+import pandas as pd
 
 class CCLIReporting:
 
@@ -19,6 +21,34 @@ class CCLIReporting:
         self.driver.get('https://reporting.ccli.com/search')
         WebDriverWait(self.driver, self.wait).until(
             ec.element_to_be_clickable((By.ID, 'SearchIinput')))
+
+    def import_usage_reports(self, dir_reports = 'usage_reports'):
+        files = os.listdir(dir_reports)
+        usage_reports = [None] * len(files)
+        for i in list(range(len(files))):
+            usage_reports[i] = pd.read_csv(
+                    os.path.join(dir_reports, files[i]), 
+                    delimiter='|', 
+                    dtype={'Name': str, 'Artist': str, 'CCLI Number': 'Int64', 'Dates Used': str}
+                )
+            usage_reports[i]['Dates Used'] = usage_reports[i]['Dates Used'].str.split("(?<=\d{4}),")
+            usage_reports[i] = usage_reports[i].explode('Dates Used')
+            
+            months_translations = {'Mär': 'Mar', 'Mai': 'May', 'Okt': 'Oct', 'Dez': 'Dec'}
+            usage_reports[i]['Dates Used'] = pd.to_datetime(
+                usage_reports[i]['Dates Used'].replace(months_translations, regex = True)
+            )
+            
+        self.usage = (
+            pd.concat(usage_reports)
+            .drop_duplicates()
+            .dropna()
+            .reset_index(drop=True)
+        )
+
+        
+        # .groupby('CCLI Number')
+        # .size()
 
     def report_song(self, id):
         self.driver.find_element(By.ID, 'SearchIinput').clear()

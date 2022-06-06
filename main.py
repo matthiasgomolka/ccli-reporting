@@ -1,19 +1,18 @@
-import pandas as pd
 import getpass
 import ccli
+from pandas.testing import assert_frame_equal
+import importlib
+importlib.reload(ccli)
 
 email = ''
 
-# get list of songs
-ids = pd.read_csv(
-    '/home/matthias/Downloads/Presenter Song Usage 2022-04-08 - 2022-05-08.csv', 
-    usecols=['CCLI Number'],
-    dtype={'CCLI Number': str}
-).dropna().loc[:, 'CCLI Number'].tolist()
-
 # report to CCLI
-reporting = ccli.CCLIReporting(email, getpass.getpass())
+reporting = ccli.CCLIReporting()
 
-reporting.reported_songs = [reporting.report_song(id) for id in ids]
+reporting.report_songs(email, getpass.getpass())
 
-reporting.close()
+assert_frame_equal(
+    reporting.used_songs.sort_values(by=['ccli_number', 'date_used']).reset_index(drop=True), 
+    reporting.reported_songs.sort_values(by=['ccli_number', 'date_used']).reset_index(drop=True)
+)
+

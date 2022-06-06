@@ -1,3 +1,4 @@
+from numpy import append
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
@@ -5,86 +6,152 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as ec
 import os
 import pandas as pd
+from datetime import datetime
+
 
 class CCLIReporting:
 
-    def __init__(self, email, password):
+    def __init__(self, dir_used_songs = 'usage_reports', dir_reported_songs = 'reported_songs'):
         self.test = True
-        self.wait = 5
-        self.reported = []
-        self.driver = webdriver.Firefox()
+        self.wait = 10
+        self.dir_used_songs = dir_used_songs
+        self.dir_reported_songs = dir_reported_songs
+        self.import_reported_songs()
+        self.import_usage_reports()
+                
+        # self.driver.get('https://reporting.ccli.com/search')
+        # WebDriverWait(self.driver, self.wait).until(
+        #     ec.element_to_be_clickable((By.ID, 'SearchIinput')))
 
-        self.driver.get('https://profile.ccli.com/account/signin')
-        self.driver.find_element(By.ID, 'EmailAddress').send_keys(email)
-        self.driver.find_element(By.ID, 'Password').send_keys(password)
-        self.driver.find_element(By.ID, 'sign-in').click()
-        self.driver.get('https://reporting.ccli.com/search')
-        WebDriverWait(self.driver, self.wait).until(
-            ec.element_to_be_clickable((By.ID, 'SearchIinput')))
-
-    def import_usage_reports(self, dir_reports = 'usage_reports'):
-        files = os.listdir(dir_reports)
+    def import_usage_reports(self):
+        files = os.listdir(self.dir_used_songs)
         usage_reports = [None] * len(files)
         for i in list(range(len(files))):
-            usage_reports[i] = pd.read_csv(
-                    os.path.join(dir_reports, files[i]), 
+            usage_reports[i] = (
+                pd.read_csv(
+                    os.path.join(self.dir_used_songs, files[i]),
                     delimiter='|', 
-                    dtype={'Name': str, 'Artist': str, 'CCLI Number': 'Int64', 'Dates Used': str}
+                    usecols=['CCLI Number', 'Dates Used'],
+                    dtype={'CCLI Number': 'Int64', 'Dates Used': str}
                 )
-            usage_reports[i]['Dates Used'] = usage_reports[i]['Dates Used'].str.split("(?<=\d{4}),")
-            usage_reports[i] = usage_reports[i].explode('Dates Used')
+                .dropna(subset = 'CCLI Number')
+            )
+            usage_reports[i].columns = ['ccli_number', 'date_used']
+            usage_reports[i]['date_used'] = usage_reports[i]['date_used'].str.split(
+                "(?<=\d{4}),")
+            usage_reports[i] = usage_reports[i].explode('date_used')
             
             months_translations = {'Mär': 'Mar', 'Mai': 'May', 'Okt': 'Oct', 'Dez': 'Dec'}
-            usage_reports[i]['Dates Used'] = pd.to_datetime(
-                usage_reports[i]['Dates Used'].replace(months_translations, regex = True)
+            usage_reports[i]['date_used'] = pd.to_datetime(
+                usage_reports[i]['date_used'].replace(months_translations, regex=True)
             )
             
-        self.usage = (
+        self.used_songs = (
             pd.concat(usage_reports)
             .drop_duplicates()
-            .dropna()
+            .sort_values('date_used')
+            .reindex(columns=['date_used', 'ccli_number'])
             .reset_index(drop=True)
         )
 
-        
-        # .groupby('CCLI Number')
-        # .size()
+    def import_reported_songs(self):
+        files = os.listdir(self.dir_reported_songs)
+        song_reports = [None] * len(files)
+        for i in list(range(len(files))):
+            song_reports[i] = pd.read_csv(
+                os.path.join(self.dir_reported_songs, files[i]),
+                delimiter='|',
+                dtype={'ccli_number': 'Int64'},
+                parse_dates=['date_used']
+            )
+
+        self.reported_songs = (
+            pd.concat(song_reports)
+            .drop_duplicates()
+            .dropna()
+            .sort_values('date_used')
+            .reset_index(drop=True)
+        )
+
+    def report_songs(self, email, password):
+        merged = self.used_songs.merge(
+            self.reported_songs,
+             how='outer',
+             on=['date_used', 'ccli_number'],
+             indicator=True
+        )
+
+        to_report = (
+            merged[merged._merge == 'left_only']
+            .drop(columns = '_merge')
+            # .groupby('ccli_number')
+            # .count()
+            .reset_index(drop=True)
+        )
+
+        if len(to_report) > 0:
+            # CCLI login
+            self.driver = webdriver.Firefox()
+            self.driver.get('https://profile.ccli.com/account/signin')
+            self.driver.find_element(By.ID, 'EmailAddress').send_keys(email)
+            self.driver.find_element(By.ID, 'Password').send_keys(password)
+            self.driver.find_element(By.ID, 'sign-in').click()
+
+            to_report['success'] = to_report['ccli_number'].apply(self.report_song)
+
+            newly_reported = (
+                to_report[to_report.success == True]
+                .drop(columns='success')
+            )
+
+            newly_reported.to_csv(
+                os.path.join(self.dir_reported_songs, 'reporting_' + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '.csv'),
+                sep='|',
+                index=False
+            )
+
+            # self.reported_songs = self.reported_songs.concat(newly_reported)
+            self.reported_songs = pd.concat([self.reported_songs, newly_reported])
+
+            self.close()
 
     def report_song(self, id):
-        self.driver.find_element(By.ID, 'SearchIinput').clear()
-        self.driver.find_element(By.ID, 'SearchIinput').send_keys(id)
-        self.driver.find_element(By.ID, 'SearchIinput').send_keys(Keys.ENTER)
+        wait = WebDriverWait(self.driver, self.wait)
+        self.driver.implicitly_wait(self.wait)
+        self.driver.get('https://reporting.ccli.com/search?s=' + str(id))
         
-        #time.sleep(5)
-        
-        WebDriverWait(self.driver, self.wait).until(
-            ec.element_to_be_clickable((By.CSS_SELECTOR, 'button.small:nth-child(2)')))
-        self.driver.find_element(
-            By.CSS_SELECTOR, 'button.small:nth-child(2)').click()
+        button_meldung = self.driver.find_element(By.CSS_SELECTOR, 'button.small:nth-child(2)')
+        wait.until(ec.element_to_be_clickable(button_meldung))
+        button_meldung.click()
         
         try:
-            WebDriverWait(self.driver, self.wait).until(
-                ec.element_to_be_clickable((By.ID, 'cclDigital')))
-            self.driver.find_element(By.ID, 'cclDigital').send_keys('1')
+            field_digital = self.driver.find_element(By.ID, 'cclDigital')
+            wait.until(ec.element_to_be_clickable(field_digital))
+            field_digital.send_keys('1')
+
 
             if self.test == True:
-                WebDriverWait(self.driver, self.wait).until(
-                    ec.element_to_be_clickable((By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(1)')))
-                self.driver.find_element(
-                    By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(1)').click()
+                # click 'Abbrechen' if in test mode
+                button_abbrechen = self.driver.find_element(By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(1)')
+                WebDriverWait(self.driver, self.wait).until(ec.element_to_be_clickable(button_abbrechen))
+                button_abbrechen.click()
             else:
-                WebDriverWait(self.driver, self.wait).until(
-                    ec.element_to_be_clickable((By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(2)')))
-                self.driver.find_element(
-                    By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(2)').click()
+                # klick 'Speicher' if not in test mode
+                button_speichern = self.driver.find_element(By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(2)')
+                WebDriverWait(self.driver, self.wait).until(ec.element_to_be_clickable(button_speichern))
+                button_speichern.click()
             
+            return True
 
         except:
+
+            # also return True if the song is 'gemeinfrei'
+            if self.driver.find_elements(By.CSS_SELECTOR, '.callout'):
+                return True
+
             self.driver.find_element(
                 By.CSS_SELECTOR, 'div.margin-top-2r:nth-child(3) > button:nth-child(1)').click()
-
-        
-        return id
+            return False
 
     def close(self):
         self.driver.close()

@@ -1,4 +1,3 @@
-from numpy import append
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
@@ -6,22 +5,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as ec
 import os
 import pandas as pd
+from datetime import date
 from datetime import datetime
 
 
 class CCLIReporting:
 
-    def __init__(self, dir_used_songs = 'usage_reports', dir_reported_songs = 'reported_songs'):
-        self.test = True
+    def __init__(self, dir_used_songs = 'usage_reports', dir_reported_songs = 'reported_songs', testmode = True):
+        self.test = testmode
         self.wait = 10
         self.dir_used_songs = dir_used_songs
         self.dir_reported_songs = dir_reported_songs
         self.import_reported_songs()
         self.import_usage_reports()
-                
-        # self.driver.get('https://reporting.ccli.com/search')
-        # WebDriverWait(self.driver, self.wait).until(
-        #     ec.element_to_be_clickable((By.ID, 'SearchIinput')))
 
     def import_usage_reports(self):
         files = os.listdir(self.dir_used_songs)
@@ -45,14 +41,19 @@ class CCLIReporting:
             usage_reports[i]['date_used'] = pd.to_datetime(
                 usage_reports[i]['date_used'].replace(months_translations, regex=True)
             )
-            
-        self.used_songs = (
-            pd.concat(usage_reports)
-            .drop_duplicates()
-            .sort_values('date_used')
-            .reindex(columns=['date_used', 'ccli_number'])
-            .reset_index(drop=True)
-        )
+        
+        if len(usage_reports) > 0:
+            self.used_songs = (
+                pd.concat(usage_reports)
+                .drop_duplicates()
+                .sort_values('date_used')
+                .reindex(columns=['date_used', 'ccli_number'])
+                .reset_index(drop=True)
+            )
+        else:
+            self.used_songs = pd.DataFrame(
+                columns=['date_used', 'ccli_number']
+            )
 
     def import_reported_songs(self):
         files = os.listdir(self.dir_reported_songs)
@@ -65,15 +66,20 @@ class CCLIReporting:
                 parse_dates=['date_used']
             )
 
-        self.reported_songs = (
-            pd.concat(song_reports)
-            .drop_duplicates()
-            .dropna()
-            .sort_values('date_used')
-            .reset_index(drop=True)
-        )
+        if len(song_reports) > 0:
+            self.reported_songs = (
+                pd.concat(song_reports)
+                .drop_duplicates()
+                .dropna()
+                .sort_values('date_used')
+                .reset_index(drop=True)
+            )
+        else:
+            self.reported_songs = pd.DataFrame(
+                columns=['date_used', 'ccli_number', 'date_reported']
+            )
 
-    def report_songs(self, email, password):
+    def report_songs(self, email, password):        
         merged = self.used_songs.merge(
             self.reported_songs,
              how='outer',
@@ -103,6 +109,7 @@ class CCLIReporting:
                 to_report[to_report.success == True]
                 .drop(columns='success')
             )
+            newly_reported['date_reported'] = date.today()#.strftime("%Y-%m-%d")
 
             newly_reported.to_csv(
                 os.path.join(self.dir_reported_songs, 'reporting_' + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '.csv'),
